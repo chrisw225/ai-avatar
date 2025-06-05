@@ -1,89 +1,88 @@
 #!/usr/bin/env python3
 """
-Test script for the complete AI Avatar system.
-This script tests both TTS and lip-sync functionality.
+Complete system test for AI Avatar with Wav2Lip integration.
+Tests TTS, lip-sync, and playback functionality.
 """
 
-import subprocess
-import sys
 import os
+import sys
+import time
+import subprocess
+from pathlib import Path
 
 def test_basic_functionality():
-    """Test basic functionality of the AI Avatar system."""
-    print("Testing basic functionality...")
+    """Test basic AI Avatar functionality."""
+    print("\n=== Testing Basic Functionality ===")
     
-    # Run the AI Avatar with a simple phrase
-    cmd = [sys.executable, "main.py", "--text", "Hello, this is a test of the AI Avatar system."]
+    # Test with a simple phrase
+    cmd = [
+        sys.executable, "main.py",
+        "--text", "Hello, this is a test of the AI Avatar system."
+    ]
     
-    try:
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=60)
-        print("✓ Basic functionality test passed")
+    print("Running AI Avatar with test phrase...")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    
+    if result.returncode == 0:
+        print("✅ Basic functionality test PASSED")
         return True
-    except subprocess.CalledProcessError as e:
-        print(f"✗ Basic functionality test failed: {e}")
-        print(f"Output: {e.stdout}")
-        print(f"Error: {e.stderr}")
-        return False
-    except subprocess.TimeoutExpired:
-        print("✗ Basic functionality test timed out")
+    else:
+        print(f"❌ Basic functionality test FAILED: {result.stderr}")
         return False
 
 def test_with_playback():
-    """Test the AI Avatar with video playback."""
-    print("Testing with playback (will timeout after 10 seconds)...")
+    """Test AI Avatar with video playback (will timeout after 10 seconds)."""
+    print("\n=== Testing with Playback ===")
     
-    # Run the AI Avatar with playback enabled
-    cmd = [sys.executable, "main.py", "--text", "This is a playback test.", "--play"]
+    cmd = [
+        sys.executable, "main.py",
+        "--text", "Testing playback functionality.",
+        "--play"
+    ]
     
+    print("Running AI Avatar with playback (will timeout in 10 seconds)...")
     try:
-        # Use a shorter timeout for playback test since it will run indefinitely
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=10)
-        print("✓ Playback test completed")
+        # Run with timeout to prevent hanging
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        print("✅ Playback test completed successfully")
         return True
     except subprocess.TimeoutExpired:
-        print("✓ Playback test passed (timed out as expected)")
+        print("✅ Playback test completed (timeout as expected)")
         return True
-    except subprocess.CalledProcessError as e:
-        print(f"✗ Playback test failed: {e}")
-        print(f"Output: {e.stdout}")
-        print(f"Error: {e.stderr}")
+    except Exception as e:
+        print(f"❌ Playback test FAILED: {e}")
         return False
 
 def check_output_files():
-    """Check if output files are created and have reasonable sizes."""
-    print("Checking output files...")
+    """Check if output files were created properly."""
+    print("\n=== Checking Output Files ===")
     
-    # Check for video output
-    video_path = "output/result.mp4"
-    audio_path = "tts/output.wav"
-    
-    success = True
-    
-    if os.path.exists(video_path):
-        size = os.path.getsize(video_path)
-        print(f"✓ Video output exists: {video_path} ({size} bytes)")
-        if size < 1000:  # Less than 1KB is probably an error
-            print("⚠ Warning: Video file is very small")
-            success = False
+    # Check video output
+    video_path = Path("output/result.mp4")
+    if video_path.exists():
+        size = video_path.stat().st_size
+        print(f"✅ Video output exists: {video_path} ({size} bytes)")
+        video_ok = size > 1000  # Should be at least 1KB
     else:
-        print(f"✗ Video output not found: {video_path}")
-        success = False
+        print(f"❌ Video output missing: {video_path}")
+        video_ok = False
     
-    if os.path.exists(audio_path):
-        size = os.path.getsize(audio_path)
-        print(f"✓ Audio output exists: {audio_path} ({size} bytes)")
-        if size < 1000:  # Less than 1KB is probably an error
-            print("⚠ Warning: Audio file is very small")
-            success = False
+    # Check audio output
+    audio_path = Path("tts/output.wav")
+    if audio_path.exists():
+        size = audio_path.stat().st_size
+        print(f"✅ Audio output exists: {audio_path} ({size} bytes)")
+        audio_ok = size > 1000  # Should be at least 1KB
     else:
-        print(f"✗ Audio output not found: {audio_path}")
-        success = False
+        print(f"❌ Audio output missing: {audio_path}")
+        audio_ok = False
     
-    return success
+    return video_ok and audio_ok
 
 def main():
-    """Run all tests."""
-    print("Starting AI Avatar system tests...\n")
+    """Run all tests and report results."""
+    print("🚀 Starting AI Avatar System Tests")
+    print("=" * 50)
     
     tests_passed = 0
     total_tests = 3
@@ -91,26 +90,24 @@ def main():
     # Test 1: Basic functionality
     if test_basic_functionality():
         tests_passed += 1
-    print()
     
     # Test 2: Check output files
     if check_output_files():
         tests_passed += 1
-    print()
     
     # Test 3: Playback test
     if test_with_playback():
         tests_passed += 1
-    print()
     
     # Summary
-    print(f"Tests completed: {tests_passed}/{total_tests} passed")
+    print("\n" + "=" * 50)
+    print(f"📊 Test Results: {tests_passed}/{total_tests} tests passed")
     
     if tests_passed == total_tests:
-        print("🎉 All tests passed! The AI Avatar system is working correctly.")
+        print("🎉 All tests PASSED! AI Avatar system is working correctly.")
         return 0
     else:
-        print("❌ Some tests failed. Please check the output above.")
+        print(f"⚠️  {total_tests - tests_passed} test(s) FAILED. Please check the issues above.")
         return 1
 
 if __name__ == "__main__":

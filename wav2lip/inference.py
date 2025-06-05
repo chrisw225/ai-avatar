@@ -1,13 +1,12 @@
-import os, sys, argparse, platform
+from os import listdir, path
 import numpy as np
 import scipy, cv2, os, sys, argparse, audio
 import json, subprocess, random, string
 from tqdm import tqdm
-
+from glob import glob
+import torch, face_detection
 from models import Wav2Lip
-import face_detection
-
-import torch
+import platform
 
 parser = argparse.ArgumentParser(description='Inference code to lip-sync videos in the wild using Wav2Lip models')
 
@@ -18,11 +17,10 @@ parser.add_argument('--face', type=str,
 					help='Filepath of video/image that contains faces to use', required=True)
 parser.add_argument('--audio', type=str, 
 					help='Filepath of video/audio file to use as raw audio source', required=True)
-
 parser.add_argument('--outfile', type=str, help='Video path to save result. See default for an e.g.', 
 								default='results/result_voice.mp4')
 
-parser.add_argument('--static', type=bool,
+parser.add_argument('--static', type=bool, 
 					help='If True, then use only first video frame for inference', default=False)
 parser.add_argument('--fps', type=float, help='Can be specified only if input is a static image (default: 25)', 
 					default=25., required=False)
@@ -32,27 +30,29 @@ parser.add_argument('--pads', nargs='+', type=int, default=[0, 10, 0, 0],
 
 parser.add_argument('--face_det_batch_size', type=int, 
 					help='Batch size for face detection', default=16)
-
 parser.add_argument('--wav2lip_batch_size', type=int, help='Batch size for Wav2Lip model(s)', default=128)
 
-parser.add_argument('--resize_factor', type=int, 
-			help='Reduce the resolution by this factor. Sometimes, best results are obtained at 480p or 720p', default=1)
+parser.add_argument('--resize_factor', default=1, type=int, 
+			help='Reduce the resolution by this factor. Sometimes, best results are obtained at 480p or 720p')
 
 parser.add_argument('--crop', nargs='+', type=int, default=[0, -1, 0, -1], 
 					help='Crop video to a smaller region (top, bottom, left, right). Applied after resize_factor and rotate arg. ' 
 					'Useful if multiple face present. -1 implies the value will be auto-inferred based on height, width')
 
 parser.add_argument('--box', nargs='+', type=int, default=[-1, -1, -1, -1], 
-					help='Specify a constant bounding box for the face. Use only as a last resort if the face detection is completely failing.'
+					help='Specify a constant bounding box for the face. Use only as a last resort if the face is not detected.'
 					'Also, might work only if the face is not moving around much. Syntax: (top, bottom, left, right).')
 
 parser.add_argument('--rotate', default=False, action='store_true',
-					help='Sometimes videos taken from a phone can be flipped 90deg. If true, will flip video right by 90deg.')
+					help='Sometimes videos taken from a phone can be flipped 90deg. If true, will flip video right by 90deg.'
+					'Use if you get a flipped result, despite feeding a normal looking video')
 
 parser.add_argument('--nosmooth', default=False, action='store_true',
 					help='Prevent smoothing face detections over a short temporal window')
 
 args = parser.parse_args()
+args.img_size = 96
+
 if os.path.isfile(args.face) and args.face.split('.')[1] in ['jpg', 'png', 'jpeg']:
 	args.static = True
 
@@ -85,12 +85,18 @@ def face_detect(images):
 		break
 
 	results = []
+	pady1, pady2, padx1, padx2 = args.pads
 	for rect, image in zip(predictions, images):
 		if rect is None:
 			cv2.imwrite('temp/faulty_frame.jpg', image) # check this frame where the face was not detected.
 			raise ValueError('Face not detected! Ensure the video contains a face in all the frames.')
+
+		y1 = max(0, rect[1] - pady1)
+		y2 = min(image.shape[0], rect[3] + pady2)
+		x1 = max(0, rect[0] - padx1)
+		x2 = min(image.shape[1], rect[2] + padx2)
 		
-		results.append(rect)
+		results.append([x1, y1, x2, y2])
 
 	boxes = np.array(results)
 	if not args.nosmooth: boxes = get_smoothened_boxes(boxes, T=5)
@@ -127,7 +133,10 @@ def datagen(frames, mels):
 		if len(img_batch) >= args.wav2lip_batch_size:
 			img_batch, mel_batch = np.asarray(img_batch), np.asarray(mel_batch)
 
-			img_batch = img_batch[:, args.img_size//2:]
+			img_masked = img_batch.copy()
+			img_masked[:, args.img_size//2:] = 0
+
+			img_batch = np.concatenate((img_masked, img_batch), axis=3) / 255.
 			mel_batch = np.reshape(mel_batch, [len(mel_batch), mel_batch.shape[1], mel_batch.shape[2], 1])
 
 			yield img_batch, mel_batch, frame_batch, coords_batch
@@ -136,7 +145,10 @@ def datagen(frames, mels):
 	if len(img_batch) > 0:
 		img_batch, mel_batch = np.asarray(img_batch), np.asarray(mel_batch)
 
-		img_batch = img_batch[:, args.img_size//2:]
+		img_masked = img_batch.copy()
+		img_masked[:, args.img_size//2:] = 0
+
+		img_batch = np.concatenate((img_masked, img_batch), axis=3) / 255.
 		mel_batch = np.reshape(mel_batch, [len(mel_batch), mel_batch.shape[1], mel_batch.shape[2], 1])
 
 		yield img_batch, mel_batch, frame_batch, coords_batch
@@ -251,7 +263,7 @@ def main():
 	gen = datagen(full_frames.copy(), mel_chunks)
 
 	for i, (img_batch, mel_batch, frames, coords) in enumerate(tqdm(gen, 
-											total=int(np.ceil(float(len(mel_chunks))/batch_size)))):
+														total=int(np.ceil(float(len(mel_chunks))/batch_size)))):
 		if i == 0:
 			model = load_model(args.checkpoint_path)
 			print ("Model loaded")
