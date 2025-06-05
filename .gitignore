@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+# Exclude large model files - these should be downloaded via setup
+wav2lip/checkpoints/
+wav2lip/face_detection/detection/sfd/
+*.pth
+*.pt
+
+# Temporary files
+temp/
+wav2lip/temp/
+*.tmp
+
+# Output files
+output/*.mp4
+output/*.avi
+tts/*.wav
+
+# Logs
+*.log
+
+# FFmpeg temporary files
+*.m4a
