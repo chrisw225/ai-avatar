@@ -1,0 +1,110 @@
+# Core FastAPI and web framework dependencies
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+websockets==12.0
+
+# HTTP client for API calls
+httpx==0.25.2
+
+# Data validation and serialization
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# Audio processing dependencies
+librosa==0.10.1
+soundfile==0.12.1
+pydub==0.25.1
+pyaudio==0.2.11
+
+# Machine learning and AI dependencies
+torch==2.1.1
+torchaudio==2.1.1
+torchvision==0.16.1
+transformers==4.36.0
+openai-whisper==20231117
+
+# Computer vision and image processing
+opencv-python==4.8.1.78
+Pillow==10.1.0
+
+# Scientific computing
+numpy==1.24.4
+scipy==1.11.4
+
+# Async support
+asyncio-mqtt==0.16.1
+
+# Configuration management
+python-dotenv==1.0.0
+
+# Logging and monitoring
+structlog==23.2.0
+
+# File handling and utilities
+pathlib2==2.3.7
+aiofiles==23.2.1
+
+# Database (optional, for conversation storage)
+sqlalchemy==2.0.23
+aiosqlite==0.19.0
+
+# Testing dependencies (optional)
+pytest==7.4.3
+pytest-asyncio==0.21.1
+httpx==0.25.2
+
+# Development dependencies (optional)
+black==23.11.0
+flake8==6.1.0
+mypy==1.7.1
+
+# Additional utilities
+click==8.1.7
+rich==13.7.0
+typer==0.9.0
+
+# CORS support
+python-cors==1.7.0
+
+# Security
+cryptography==41.0.8
+
+# Video processing (for SadTalker integration)
+imageio==2.31.6
+imageio-ffmpeg==0.4.9
+moviepy==1.0.3
+
+# GPU acceleration (optional, for CUDA support)
+# Uncomment if you have CUDA-capable GPU
+# torch==2.1.1+cu118 --index-url https://download.pytorch.org/whl/cu118
+# torchaudio==2.1.1+cu118 --index-url https://download.pytorch.org/whl/cu118
+# torchvision==0.16.1+cu118 --index-url https://download.pytorch.org/whl/cu118
+
+# Additional audio processing
+resampy==0.4.2
+numba==0.58.1
+
+# JSON handling
+orjson==3.9.10
+
+# Date and time utilities
+python-dateutil==2.8.2
+
+# Environment detection
+psutil==5.9.6
+
+# File type detection
+python-magic==0.4.27
+
+# Progress bars
+tqdm==4.66.1
+
+# Async file operations
+aiofiles==23.2.1
+
+# Memory optimization
+memory-profiler==0.61.0
+
+# Process management
+supervisor==4.2.5 
