@@ -74,6 +74,7 @@ cryptography==41.0.8
 imageio==2.31.6
 imageio-ffmpeg==0.4.9
 moviepy==1.0.3
+ffmpeg-python==0.2.0
 
 # GPU acceleration (optional, for CUDA support)
 # Uncomment if you have CUDA-capable GPU

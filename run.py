@@ -28,19 +28,27 @@ def check_dependencies():
         import torch
         import whisper
         import librosa
-        logger.info("✓ Core dependencies found")
+        import imageio_ffmpeg
+        import ffmpeg  # ffmpeg-python
+        logger.info("✓ Core dependencies found (including FFmpeg packages)")
     except ImportError as e:
         logger.error(f"✗ Missing dependency: {e}")
         logger.error("Please run: pip install -r requirements.txt")
         return False
     
-    # Check for FFmpeg
+    # Check for FFmpeg using our utility
     try:
-        subprocess.run(['ffmpeg', '-version'], 
-                      capture_output=True, check=True)
-        logger.info("✓ FFmpeg found")
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        logger.warning("⚠ FFmpeg not found - some audio processing may fail")
+        from app.utils.ffmpeg_utils import ensure_ffmpeg, get_ffmpeg_manager
+        if ensure_ffmpeg():
+            ffmpeg_manager = get_ffmpeg_manager()
+            version = ffmpeg_manager.get_version()
+            logger.info(f"✓ FFmpeg found (version: {version or 'unknown'})")
+        else:
+            logger.warning("⚠ FFmpeg not available - some audio processing may fail")
+    except ImportError:
+        logger.warning("⚠ FFmpeg utilities not available")
+    except Exception as e:
+        logger.warning(f"⚠ FFmpeg check failed: {e}")
     
     return True
 

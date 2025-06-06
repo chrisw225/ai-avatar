@@ -16,6 +16,14 @@ from pydub.utils import which
 
 logger = logging.getLogger(__name__)
 
+# Import FFmpeg utilities
+try:
+    from .ffmpeg_utils import get_ffmpeg_manager
+    FFMPEG_UTILS_AVAILABLE = True
+except ImportError:
+    FFMPEG_UTILS_AVAILABLE = False
+    logger.warning("FFmpeg utilities not available")
+
 class AudioProcessor:
     """Audio processing utilities"""
     
@@ -26,8 +34,19 @@ class AudioProcessor:
         
         # Check for ffmpeg availability
         self.ffmpeg_available = which("ffmpeg") is not None
-        if not self.ffmpeg_available:
-            logger.warning("FFmpeg not found. Some audio processing features may be limited.")
+        
+        # Initialize FFmpeg manager if available
+        if FFMPEG_UTILS_AVAILABLE:
+            self.ffmpeg_manager = get_ffmpeg_manager()
+            self.ffmpeg_manager.initialize()
+            if self.ffmpeg_manager.is_available():
+                logger.info("FFmpeg utilities initialized successfully")
+            else:
+                logger.warning("FFmpeg utilities available but FFmpeg not found")
+        else:
+            self.ffmpeg_manager = None
+            if not self.ffmpeg_available:
+                logger.warning("FFmpeg not found. Some audio processing features may be limited.")
     
     def validate_audio_file(self, file_path: str) -> Dict[str, Any]:
         """
@@ -93,7 +112,29 @@ class AudioProcessor:
             if output_path is None:
                 output_path = os.path.splitext(input_path)[0] + "_converted.wav"
             
-            # Load audio with librosa
+            # Try FFmpeg first if available
+            if self.ffmpeg_manager and self.ffmpeg_manager.is_available():
+                success = self.ffmpeg_manager.convert_audio_with_ffmpeg_python(
+                    input_path, 
+                    output_path, 
+                    sample_rate=self.target_sample_rate,
+                    channels=self.target_channels
+                )
+                
+                if success:
+                    # Get duration for response
+                    duration = self.get_audio_duration(output_path)
+                    return {
+                        "success": True,
+                        "output_path": output_path,
+                        "target_sample_rate": self.target_sample_rate,
+                        "duration": duration,
+                        "method": "ffmpeg"
+                    }
+                else:
+                    logger.warning("FFmpeg conversion failed, falling back to librosa")
+            
+            # Fallback to librosa method
             audio_data, original_sr = librosa.load(input_path, sr=None)
             
             # Resample if necessary
@@ -124,7 +165,8 @@ class AudioProcessor:
                 "output_path": output_path,
                 "original_sample_rate": original_sr,
                 "target_sample_rate": self.target_sample_rate,
-                "duration": len(audio_data) / self.target_sample_rate
+                "duration": len(audio_data) / self.target_sample_rate,
+                "method": "librosa"
             }
             
         except Exception as e:
@@ -405,6 +447,13 @@ class AudioProcessor:
             Duration in seconds
         """
         try:
+            # Try FFmpeg first if available
+            if self.ffmpeg_manager and self.ffmpeg_manager.is_available():
+                media_info = self.ffmpeg_manager.get_media_info(audio_path)
+                if media_info and 'duration' in media_info:
+                    return float(media_info['duration'])
+            
+            # Fallback to librosa
             return librosa.get_duration(filename=audio_path)
         except Exception as e:
             logger.error(f"Duration calculation error: {e}")
@@ -449,4 +498,61 @@ class AudioProcessor:
             
         except Exception as e:
             logger.error(f"Sample rate conversion error: {e}")
-            return {"success": False, "error": str(e)} 
+            return {"success": False, "error": str(e)}
+    
+    def extract_audio_from_video(self, video_path: str, audio_path: str) -> Dict[str, Any]:
+        """
+        Extract audio from video file using FFmpeg
+        
+        Args:
+            video_path: Path to video file
+            audio_path: Path for extracted audio
+            
+        Returns:
+            Dictionary with extraction results
+        """
+        try:
+            if self.ffmpeg_manager and self.ffmpeg_manager.is_available():
+                success = self.ffmpeg_manager.extract_audio_from_video(
+                    video_path, 
+                    audio_path, 
+                    sample_rate=self.target_sample_rate
+                )
+                
+                if success:
+                    duration = self.get_audio_duration(audio_path)
+                    return {
+                        "success": True,
+                        "output_path": audio_path,
+                        "duration": duration,
+                        "sample_rate": self.target_sample_rate
+                    }
+                else:
+                    return {"success": False, "error": "FFmpeg extraction failed"}
+            else:
+                return {"success": False, "error": "FFmpeg not available for video processing"}
+                
+        except Exception as e:
+            logger.error(f"Audio extraction error: {e}")
+            return {"success": False, "error": str(e)}
+    
+    def get_media_info(self, file_path: str) -> Optional[Dict[str, Any]]:
+        """
+        Get comprehensive media file information
+        
+        Args:
+            file_path: Path to media file
+            
+        Returns:
+            Dictionary with media information or None
+        """
+        try:
+            if self.ffmpeg_manager and self.ffmpeg_manager.is_available():
+                return self.ffmpeg_manager.get_media_info(file_path)
+            else:
+                # Fallback to basic info
+                return self.validate_audio_file(file_path)
+                
+        except Exception as e:
+            logger.error(f"Media info error: {e}")
+            return None
