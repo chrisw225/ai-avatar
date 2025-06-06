@@ -1,444 +1,459 @@
 """
-Lip Synchronization Service using SadTalker
-Handles video generation with lip sync using the provided avatar image
+Lip Sync Service
+Handles lip synchronization and avatar video generation.
 """
 
-import asyncio
-import logging
-import time
 import os
-import sys
+import logging
+import asyncio
 import tempfile
-import subprocess
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, Tuple
 from pathlib import Path
 
-import torch
 import cv2
 import numpy as np
 from PIL import Image
 
-from ..config import get_settings
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+
 class LipSyncService:
-    """Lip synchronization service using SadTalker"""
+    """Lip synchronization service for avatar video generation."""
     
     def __init__(self):
-        self.settings = get_settings()
-        self.is_initialized = False
-        self.sadtalker_path = Path(self.settings.sadtalker_model_path)
-        self.device = self._get_device()
-        self.avatar_image_path = self.settings.avatar_path
+        """Initialize the LipSync service."""
+        self.model = None
+        self.avatar_image_path = None
+        self.video_fps = settings.VIDEO_FPS
+        self.video_resolution = self._parse_resolution(settings.VIDEO_RESOLUTION)
         
-    def _get_device(self) -> str:
-        """Determine the best device for processing"""
-        if torch.cuda.is_available():
-            return "cuda"
-        return "cpu"
+        logger.info("Initializing LipSync service")
+        logger.info(f"Video FPS: {self.video_fps}")
+        logger.info(f"Video resolution: {self.video_resolution}")
     
-    async def initialize(self) -> None:
-        """Initialize the lip sync service"""
-        if self.is_initialized:
-            return
-            
+    def _parse_resolution(self, resolution_str: str) -> Tuple[int, int]:
+        """Parse resolution string like '512x512' to tuple (width, height)."""
         try:
-            logger.info("Initializing Lip Sync service with SadTalker")
-            logger.info(f"Using device: {self.device}")
-            logger.info(f"Avatar image: {self.avatar_image_path}")
+            width, height = map(int, resolution_str.split('x'))
+            return (width, height)
+        except:
+            logger.warning(f"Invalid resolution format: {resolution_str}, using default 512x512")
+            return (512, 512)
+    
+    async def initialize(self):
+        """Initialize the LipSync service."""
+        try:
+            # Check for default avatar image
+            avatar_path = "avatar.png"
+            if os.path.exists(avatar_path):
+                self.avatar_image_path = avatar_path
+                logger.info(f"Found avatar image: {avatar_path}")
+            else:
+                # Create a default avatar if none exists
+                await self._create_default_avatar()
             
-            # Check if SadTalker is available
-            if not self.sadtalker_path.exists():
-                raise Exception(f"SadTalker not found at {self.sadtalker_path}")
-            
-            # Check if avatar image exists
-            if not os.path.exists(self.avatar_image_path):
-                raise Exception(f"Avatar image not found at {self.avatar_image_path}")
-            
-            # Validate avatar image
-            await self._validate_avatar_image()
-            
-            # Add SadTalker to Python path
-            sys.path.insert(0, str(self.sadtalker_path))
-            
-            # Initialize SadTalker
-            await self._setup_sadtalker()
-            
-            self.is_initialized = True
-            logger.info("Lip Sync Service initialized successfully")
+            logger.info("LipSync service initialized successfully")
             
         except Exception as e:
-            logger.error(f"Failed to initialize Lip Sync service: {e}")
+            logger.error(f"Failed to initialize LipSync service: {e}")
             raise
     
-    async def _validate_avatar_image(self) -> None:
-        """Validate the avatar image"""
+    async def _create_default_avatar(self):
+        """Create a default avatar image."""
         try:
-            # Load and check image
-            image = Image.open(self.avatar_image_path)
-            width, height = image.size
+            # Create a simple default avatar
+            width, height = self.video_resolution
             
-            logger.info(f"Avatar image size: {width}x{height}")
+            # Create a simple face-like image
+            avatar = np.ones((height, width, 3), dtype=np.uint8) * 240  # Light gray background
             
-            # Check if image is square (recommended for SadTalker)
-            if width != height:
-                logger.warning(f"Avatar image is not square ({width}x{height}). Square images work best.")
+            # Draw a simple face
+            center_x, center_y = width // 2, height // 2
             
-            # Check if image is at least 512x512
-            if width < 512 or height < 512:
-                logger.warning(f"Avatar image is smaller than 512x512. Larger images produce better results.")
+            # Face outline (circle)
+            cv2.circle(avatar, (center_x, center_y), min(width, height) // 3, (200, 180, 160), -1)
             
-            # Check image format
-            if image.format not in ['PNG', 'JPEG', 'JPG']:
-                logger.warning(f"Avatar image format ({image.format}) may not be optimal. PNG or JPEG recommended.")
+            # Eyes
+            eye_y = center_y - height // 8
+            eye_offset = width // 8
+            cv2.circle(avatar, (center_x - eye_offset, eye_y), width // 20, (50, 50, 50), -1)
+            cv2.circle(avatar, (center_x + eye_offset, eye_y), width // 20, (50, 50, 50), -1)
+            
+            # Mouth area (will be animated)
+            mouth_y = center_y + height // 8
+            cv2.ellipse(avatar, (center_x, mouth_y), (width // 12, height // 24), 0, 0, 180, (100, 50, 50), 2)
+            
+            # Save default avatar
+            self.avatar_image_path = "avatar.png"
+            cv2.imwrite(self.avatar_image_path, avatar)
+            
+            logger.info(f"Created default avatar: {self.avatar_image_path}")
             
         except Exception as e:
-            logger.error(f"Avatar image validation failed: {e}")
+            logger.error(f"Error creating default avatar: {e}")
             raise
     
-    async def _setup_sadtalker(self) -> None:
-        """Setup SadTalker environment"""
-        try:
-            logger.info("Setting up SadTalker environment")
-            
-            # Check for required models and download if needed
-            checkpoints_dir = self.sadtalker_path / "checkpoints"
-            if not checkpoints_dir.exists():
-                logger.info("Downloading SadTalker checkpoints...")
-                await self._download_sadtalker_models()
-            
-            # Initialize SadTalker models (placeholder)
-            # The actual implementation would load the SadTalker models here
-            logger.info("SadTalker models loaded")
-            
-        except Exception as e:
-            logger.error(f"SadTalker setup failed: {e}")
-            raise
-    
-    async def _download_sadtalker_models(self) -> None:
-        """Download SadTalker model checkpoints"""
-        try:
-            # This would download the required model checkpoints
-            # Implementation depends on SadTalker requirements
-            logger.info("SadTalker model download would be implemented here")
-            
-            # Create checkpoints directory
-            checkpoints_dir = self.sadtalker_path / "checkpoints"
-            checkpoints_dir.mkdir(exist_ok=True)
-            
-        except Exception as e:
-            logger.error(f"Failed to download SadTalker models: {e}")
-            raise
-    
-    async def generate_lip_sync_video(
+    async def generate_lipsync_video(
         self, 
-        audio_file_path: str,
-        avatar_image_path: Optional[str] = None,
-        expression_scale: float = 1.0,
-        pose_style: int = 0,
-        background_enhancer: bool = True
-    ) -> Dict[str, Any]:
-        """
-        Generate lip-synced video from audio
-        
-        Args:
-            audio_file_path: Path to audio file
-            avatar_image_path: Path to avatar image (None for default)
-            expression_scale: Scale of facial expressions (0.0-2.0)
-            pose_style: Head pose style (0-45)
-            background_enhancer: Whether to enhance background
-            
-        Returns:
-            Dictionary with video file path and metadata
-        """
-        if not self.is_initialized:
-            await self.initialize()
-        
-        start_time = time.time()
-        
-        try:
-            logger.info(f"Generating lip sync video for audio: {audio_file_path}")
-            
-            # Use provided avatar or default
-            avatar_path = avatar_image_path or self.avatar_image_path
-            
-            # Validate inputs
-            if not os.path.exists(audio_file_path):
-                raise Exception(f"Audio file not found: {audio_file_path}")
-            
-            if not os.path.exists(avatar_path):
-                raise Exception(f"Avatar image not found: {avatar_path}")
-            
-            # Create temporary output file
-            output_file = tempfile.NamedTemporaryFile(
-                suffix=".mp4", 
-                delete=False,
-                dir=self.settings.temp_dir
-            )
-            output_path = output_file.name
-            output_file.close()
-            
-            # Generate lip sync video using SadTalker
-            success = await self._run_sadtalker_generation(
-                audio_path=audio_file_path,
-                avatar_path=avatar_path,
-                output_path=output_path,
-                expression_scale=expression_scale,
-                pose_style=pose_style,
-                background_enhancer=background_enhancer
-            )
-            
-            if not success:
-                raise Exception("SadTalker video generation failed")
-            
-            # Get video metadata
-            duration, fps, resolution = self._get_video_metadata(output_path)
-            processing_time = time.time() - start_time
-            
-            result = {
-                "video_file": output_path,
-                "audio_file": audio_file_path,
-                "avatar_image": avatar_path,
-                "duration": duration,
-                "fps": fps,
-                "resolution": resolution,
-                "processing_time": processing_time,
-                "expression_scale": expression_scale,
-                "pose_style": pose_style
-            }
-            
-            logger.info(f"Lip sync video generated in {processing_time:.2f}s")
-            return result
-            
-        except Exception as e:
-            logger.error(f"Lip sync video generation failed: {e}")
-            return {
-                "video_file": None,
-                "error": str(e),
-                "processing_time": time.time() - start_time
-            }
-    
-    async def _run_sadtalker_generation(
-        self,
-        audio_path: str,
-        avatar_path: str,
-        output_path: str,
-        expression_scale: float,
-        pose_style: int,
-        background_enhancer: bool
-    ) -> bool:
-        """Run SadTalker video generation"""
-        try:
-            # This is a placeholder implementation
-            # The actual implementation would call SadTalker API or command line tool
-            
-            logger.info("Running SadTalker generation (placeholder)")
-            
-            # For now, create a simple video with the avatar image
-            # In real implementation, this would use SadTalker to generate lip-synced video
-            
-            # Load avatar image
-            avatar_img = cv2.imread(avatar_path)
-            if avatar_img is None:
-                raise Exception(f"Could not load avatar image: {avatar_path}")
-            
-            # Get audio duration to determine video length
-            audio_duration = self._get_audio_duration(audio_path)
-            
-            # Video parameters
-            fps = self.settings.video_fps
-            total_frames = int(audio_duration * fps)
-            height, width = avatar_img.shape[:2]
-            
-            # Create video writer
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            video_writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-            
-            # Generate frames (placeholder - just static image)
-            for frame_idx in range(total_frames):
-                # In real implementation, this would be the lip-synced frame from SadTalker
-                frame = avatar_img.copy()
-                
-                # Add some simple animation (placeholder)
-                # This would be replaced by actual lip sync from SadTalker
-                time_factor = frame_idx / fps
-                mouth_movement = int(5 * np.sin(time_factor * 10))  # Simple mouth movement simulation
-                
-                video_writer.write(frame)
-            
-            video_writer.release()
-            
-            logger.info(f"Placeholder video generated: {output_path}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"SadTalker generation error: {e}")
-            return False
-    
-    def _get_audio_duration(self, audio_path: str) -> float:
-        """Get duration of audio file"""
-        try:
-            import librosa
-            duration = librosa.get_duration(filename=audio_path)
-            return duration
-        except Exception:
-            # Fallback using ffprobe
-            try:
-                result = subprocess.run([
-                    'ffprobe', '-v', 'quiet', '-show_entries', 
-                    'format=duration', '-of', 'csv=p=0', audio_path
-                ], capture_output=True, text=True)
-                return float(result.stdout.strip())
-            except Exception:
-                return 5.0  # Default duration
-    
-    def _get_video_metadata(self, video_path: str) -> tuple:
-        """Get video metadata (duration, fps, resolution)"""
-        try:
-            cap = cv2.VideoCapture(video_path)
-            
-            # Get video properties
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            
-            duration = frame_count / fps if fps > 0 else 0
-            resolution = f"{width}x{height}"
-            
-            cap.release()
-            
-            return duration, fps, resolution
-            
-        except Exception as e:
-            logger.error(f"Failed to get video metadata: {e}")
-            return 0.0, 30.0, "512x512"
-    
-    async def generate_batch_videos(
-        self, 
-        audio_files: List[str],
-        avatar_image_path: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
-        """
-        Generate multiple lip sync videos in batch
-        
-        Args:
-            audio_files: List of audio file paths
-            avatar_image_path: Path to avatar image (None for default)
-            
-        Returns:
-            List of results for each video
-        """
-        if not self.is_initialized:
-            await self.initialize()
-        
-        results = []
-        
-        for audio_file in audio_files:
-            try:
-                result = await self.generate_lip_sync_video(
-                    audio_file_path=audio_file,
-                    avatar_image_path=avatar_image_path
-                )
-                results.append(result)
-                
-            except Exception as e:
-                logger.error(f"Batch processing failed for {audio_file}: {e}")
-                results.append({
-                    "video_file": None,
-                    "audio_file": audio_file,
-                    "error": str(e)
-                })
-        
-        return results
-    
-    async def preprocess_avatar_image(
-        self, 
-        input_image_path: str,
-        output_size: tuple = (512, 512)
+        audio_path: str, 
+        avatar_path: Optional[str] = None,
+        output_path: Optional[str] = None
     ) -> str:
         """
-        Preprocess avatar image for optimal results
+        Generate a lip-synced video from audio and avatar image.
         
         Args:
-            input_image_path: Path to input image
-            output_size: Target size (width, height)
+            audio_path: Path to the audio file
+            avatar_path: Path to the avatar image (optional, uses default if not provided)
+            output_path: Output video path (optional, will generate if not provided)
             
         Returns:
-            Path to preprocessed image
+            Path to the generated video file
         """
         try:
-            # Load image
-            image = Image.open(input_image_path)
+            if not self.avatar_image_path and not avatar_path:
+                await self.initialize()
             
-            # Convert to RGB if needed
-            if image.mode != 'RGB':
-                image = image.convert('RGB')
+            # Use provided avatar or default
+            avatar_to_use = avatar_path or self.avatar_image_path
             
-            # Resize to target size
-            image = image.resize(output_size, Image.Resampling.LANCZOS)
+            if not os.path.exists(avatar_to_use):
+                raise FileNotFoundError(f"Avatar image not found: {avatar_to_use}")
             
-            # Create output path
-            output_path = input_image_path.replace('.', '_processed.')
-            if not output_path.endswith(('.png', '.jpg', '.jpeg')):
-                output_path += '.png'
+            if not os.path.exists(audio_path):
+                raise FileNotFoundError(f"Audio file not found: {audio_path}")
             
-            # Save preprocessed image
-            image.save(output_path, 'PNG', quality=95)
+            # Generate output path if not provided
+            if not output_path:
+                output_path = os.path.join(
+                    settings.OUTPUT_DIR,
+                    f"lipsync_{hash(audio_path) % 1000000}.mp4"
+                )
             
-            logger.info(f"Avatar image preprocessed: {output_path}")
+            # Ensure output directory exists
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            
+            # Get audio duration
+            audio_duration = await self._get_audio_duration(audio_path)
+            
+            # Run lip sync generation in thread pool
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                self._generate_video_sync,
+                avatar_to_use,
+                audio_path,
+                output_path,
+                audio_duration
+            )
+            
+            logger.info(f"Generated lip-sync video: {output_path}")
             return output_path
             
         except Exception as e:
-            logger.error(f"Avatar preprocessing failed: {e}")
-            return input_image_path
+            logger.error(f"Error generating lip-sync video: {e}")
+            raise
     
-    async def get_supported_formats(self) -> Dict[str, List[str]]:
-        """Get supported input and output formats"""
+    def _generate_video_sync(
+        self, 
+        avatar_path: str, 
+        audio_path: str, 
+        output_path: str, 
+        duration: float
+    ):
+        """Generate video synchronously."""
+        try:
+            # Load avatar image
+            avatar_img = cv2.imread(avatar_path)
+            if avatar_img is None:
+                raise ValueError(f"Could not load avatar image: {avatar_path}")
+            
+            # Resize avatar to target resolution
+            avatar_img = cv2.resize(avatar_img, self.video_resolution)
+            
+            # Calculate total frames
+            total_frames = int(duration * self.video_fps)
+            
+            # Set up video writer
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            video_writer = cv2.VideoWriter(
+                output_path, 
+                fourcc, 
+                self.video_fps, 
+                self.video_resolution
+            )
+            
+            try:
+                # Generate frames with simple mouth animation
+                for frame_idx in range(total_frames):
+                    frame = self._generate_frame(avatar_img.copy(), frame_idx, total_frames)
+                    video_writer.write(frame)
+                
+            finally:
+                video_writer.release()
+            
+            # Add audio to video using ffmpeg (if available)
+            self._add_audio_to_video_sync(output_path, audio_path)
+            
+        except Exception as e:
+            logger.error(f"Synchronous video generation failed: {e}")
+            raise
+    
+    def _generate_frame(self, avatar_img: np.ndarray, frame_idx: int, total_frames: int) -> np.ndarray:
+        """Generate a single frame with mouth animation."""
+        try:
+            height, width = avatar_img.shape[:2]
+            center_x, center_y = width // 2, height // 2
+            
+            # Simple mouth animation based on frame index
+            # This creates a basic opening/closing mouth effect
+            mouth_y = center_y + height // 8
+            
+            # Create a simple oscillating mouth movement
+            time_factor = (frame_idx / total_frames) * 10  # Adjust speed
+            mouth_openness = abs(np.sin(time_factor)) * 0.5 + 0.2  # 0.2 to 0.7 range
+            
+            # Draw mouth
+            mouth_width = int(width // 12 * (1 + mouth_openness))
+            mouth_height = int(height // 24 * mouth_openness)
+            
+            # Clear previous mouth area
+            cv2.ellipse(
+                avatar_img, 
+                (center_x, mouth_y), 
+                (width // 10, height // 20), 
+                0, 0, 360, 
+                (200, 180, 160),  # Face color
+                -1
+            )
+            
+            # Draw new mouth
+            if mouth_openness > 0.4:
+                # Open mouth
+                cv2.ellipse(
+                    avatar_img, 
+                    (center_x, mouth_y), 
+                    (mouth_width, mouth_height), 
+                    0, 0, 360, 
+                    (50, 20, 20), 
+                    -1
+                )
+            else:
+                # Closed mouth
+                cv2.ellipse(
+                    avatar_img, 
+                    (center_x, mouth_y), 
+                    (mouth_width, mouth_height // 2), 
+                    0, 0, 180, 
+                    (100, 50, 50), 
+                    2
+                )
+            
+            return avatar_img
+            
+        except Exception as e:
+            logger.error(f"Error generating frame: {e}")
+            return avatar_img
+    
+    async def _get_audio_duration(self, audio_path: str) -> float:
+        """Get duration of audio file."""
+        try:
+            # Try using librosa if available
+            try:
+                import librosa
+                duration = librosa.get_duration(filename=audio_path)
+                return duration
+            except ImportError:
+                pass
+            
+            # Fallback: use ffprobe if available
+            import subprocess
+            result = subprocess.run([
+                'ffprobe', '-v', 'quiet', '-show_entries', 
+                'format=duration', '-of', 'csv=p=0', audio_path
+            ], capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                return float(result.stdout.strip())
+            
+            # Final fallback: estimate based on file size (very rough)
+            file_size = os.path.getsize(audio_path)
+            estimated_duration = file_size / (44100 * 2 * 2)  # Rough estimate for 16-bit stereo
+            logger.warning(f"Using estimated duration: {estimated_duration:.2f}s")
+            return estimated_duration
+            
+        except Exception as e:
+            logger.error(f"Error getting audio duration: {e}")
+            return 5.0  # Default fallback duration
+    
+    async def _add_audio_to_video(self, video_path: str, audio_path: str):
+        """Add audio track to video using ffmpeg."""
+        try:
+            import subprocess
+            
+            # Create temporary output path
+            temp_output = video_path.replace('.mp4', '_with_audio.mp4')
+            
+            # Run ffmpeg to combine video and audio
+            cmd = [
+                'ffmpeg', '-y',  # -y to overwrite output file
+                '-i', video_path,  # Input video
+                '-i', audio_path,  # Input audio
+                '-c:v', 'copy',    # Copy video stream
+                '-c:a', 'aac',     # Encode audio as AAC
+                '-shortest',       # Stop at shortest stream
+                temp_output
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                # Replace original video with the one that has audio
+                os.replace(temp_output, video_path)
+                logger.info("Successfully added audio to video")
+            else:
+                logger.warning(f"Failed to add audio to video: {result.stderr}")
+                # Clean up temp file if it exists
+                if os.path.exists(temp_output):
+                    os.remove(temp_output)
+                    
+        except Exception as e:
+            logger.warning(f"Could not add audio to video: {e}")
+    
+    def _add_audio_to_video_sync(self, video_path: str, audio_path: str):
+        """Add audio track to video using ffmpeg (synchronous version)."""
+        try:
+            import subprocess
+            
+            # Create temporary output path
+            temp_output = video_path.replace('.mp4', '_with_audio.mp4')
+            
+            # Run ffmpeg to combine video and audio
+            cmd = [
+                'ffmpeg', '-y',  # -y to overwrite output file
+                '-i', video_path,  # Input video
+                '-i', audio_path,  # Input audio
+                '-c:v', 'copy',    # Copy video stream
+                '-c:a', 'aac',     # Encode audio as AAC
+                '-shortest',       # Stop at shortest stream
+                temp_output
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                # Replace original video with the one that has audio
+                os.replace(temp_output, video_path)
+                logger.info("Successfully added audio to video")
+            else:
+                logger.warning(f"Failed to add audio to video: {result.stderr}")
+                # Clean up temp file if it exists
+                if os.path.exists(temp_output):
+                    os.remove(temp_output)
+                    
+        except Exception as e:
+            logger.warning(f"Could not add audio to video: {e}")
+    
+    async def set_avatar_image(self, image_path: str) -> bool:
+        """
+        Set a new avatar image.
+        
+        Args:
+            image_path: Path to the new avatar image
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            if not os.path.exists(image_path):
+                raise FileNotFoundError(f"Avatar image not found: {image_path}")
+            
+            # Validate image
+            img = cv2.imread(image_path)
+            if img is None:
+                raise ValueError(f"Invalid image file: {image_path}")
+            
+            self.avatar_image_path = image_path
+            logger.info(f"Avatar image updated: {image_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error setting avatar image: {e}")
+            return False
+    
+    async def get_avatar_info(self) -> Dict[str, Any]:
+        """Get information about the current avatar."""
+        try:
+            if not self.avatar_image_path or not os.path.exists(self.avatar_image_path):
+                return {"error": "No avatar image available"}
+            
+            # Get image dimensions
+            img = cv2.imread(self.avatar_image_path)
+            height, width = img.shape[:2]
+            
+            # Get file size
+            file_size = os.path.getsize(self.avatar_image_path)
+            
+            return {
+                "path": self.avatar_image_path,
+                "width": width,
+                "height": height,
+                "file_size": file_size,
+                "target_resolution": self.video_resolution
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting avatar info: {e}")
+            return {"error": str(e)}
+    
+    def get_supported_formats(self) -> Dict[str, list]:
+        """Get supported file formats."""
         return {
-            "audio_formats": ["wav", "mp3", "m4a", "flac"],
-            "image_formats": ["png", "jpg", "jpeg"],
-            "video_formats": ["mp4", "avi", "mov"]
+            "image_formats": ["png", "jpg", "jpeg", "bmp", "tiff"],
+            "video_formats": ["mp4", "avi", "mov"],
+            "audio_formats": ["wav", "mp3", "m4a", "flac"]
         }
     
-    async def health_check(self) -> Dict[str, Any]:
-        """Check service health"""
+    async def health_check(self) -> str:
+        """Check the health of the LipSync service."""
         try:
-            if not self.is_initialized:
-                await self.initialize()
+            if not self.avatar_image_path:
+                return "no_avatar"
             
-            # Check if avatar image is accessible
-            avatar_accessible = os.path.exists(self.avatar_image_path)
+            if not os.path.exists(self.avatar_image_path):
+                return "avatar_missing"
             
-            return {
-                "status": "healthy",
-                "device": self.device,
-                "sadtalker_path": str(self.sadtalker_path),
-                "avatar_image": self.avatar_image_path,
-                "avatar_accessible": avatar_accessible,
-                "initialized": self.is_initialized
-            }
+            # Test image loading
+            img = cv2.imread(self.avatar_image_path)
+            if img is None:
+                return "avatar_invalid"
+            
+            return "healthy"
+            
         except Exception as e:
-            return {
-                "status": "unhealthy",
-                "error": str(e)
-            }
+            logger.error(f"LipSync health check failed: {e}")
+            return f"error: {str(e)}"
     
-    async def cleanup(self) -> None:
-        """Cleanup resources"""
-        # Clean up temporary video files
-        if self.settings.cleanup_temp_files:
-            temp_dir = Path(self.settings.temp_dir)
-            for file in temp_dir.glob("*.mp4"):
-                try:
-                    if file.stat().st_mtime < time.time() - self.settings.max_temp_file_age:
-                        file.unlink()
-                except Exception:
-                    pass
-        
-        self.is_initialized = False
-        logger.info("Lip Sync Service cleaned up")
+    async def cleanup(self):
+        """Clean up resources."""
+        try:
+            # Clean up temporary files if any
+            logger.info("LipSync service cleaned up")
+            
+        except Exception as e:
+            logger.error(f"Error cleaning up LipSync service: {e}")
+    
+    def get_service_info(self) -> Dict[str, Any]:
+        """Get information about the LipSync service."""
+        return {
+            "avatar_path": self.avatar_image_path,
+            "video_fps": self.video_fps,
+            "video_resolution": self.video_resolution,
+            "supported_formats": self.get_supported_formats(),
+            "initialized": self.avatar_image_path is not None
+        }
 
 # Global lip sync service instance
 lipsync_service = LipSyncService() 

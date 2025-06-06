@@ -26,7 +26,7 @@ openai-whisper==20231117
 
 # Computer vision and image processing
 opencv-python==4.8.1.78
-Pillow==10.1.0
+Pillow>=8.3.2,<10.1.0
 
 # Scientific computing
 numpy==1.24.4
@@ -64,11 +64,11 @@ click==8.1.7
 rich==13.7.0
 typer==0.9.0
 
-# CORS support
-python-cors==1.7.0
+# CORS support (built into FastAPI)
+# No additional package needed
 
-# Security
-cryptography==41.0.8
+# Security and encryption
+cryptography==42.0.8
 
 # Video processing (for SadTalker integration)
 imageio==2.31.6
@@ -108,4 +108,7 @@ aiofiles==23.2.1
 memory-profiler==0.61.0
 
 # Process management
-supervisor==4.2.5 
+supervisor==4.2.5
+
+# Text-to-Speech
+TTS==0.22.0 

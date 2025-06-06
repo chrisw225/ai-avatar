@@ -1,321 +1,346 @@
 """
-Large Language Model Service using Ollama
-Handles text generation with configurable model selection
+Large Language Model (LLM) Service
+Handles text generation and conversation using various LLM models.
 """
 
-import asyncio
 import logging
-import time
+import asyncio
 import json
-from typing import Optional, Dict, Any, List, AsyncGenerator
-
+from typing import Optional, Dict, Any, List
 import httpx
-from ..config import get_settings, update_ollama_config
+
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+
 class LLMService:
-    """LLM service using Ollama with configurable models"""
+    """Large Language Model service for text generation and conversation."""
     
     def __init__(self):
-        self.settings = get_settings()
-        self.client: Optional[httpx.AsyncClient] = None
-        self.is_initialized = False
-        self.available_models: List[str] = []
+        """Initialize the LLM service."""
+        self.model_name = settings.LLM_MODEL
+        self.ollama_host = settings.OLLAMA_HOST
+        self.client = None
+        self.conversation_history = {}
         
-    async def initialize(self) -> None:
-        """Initialize the LLM service"""
-        if self.is_initialized:
-            return
-            
+        logger.info(f"Initializing LLM service with model: {self.model_name}")
+        logger.info(f"Ollama host: {self.ollama_host}")
+    
+    async def initialize(self):
+        """Initialize the LLM service."""
         try:
-            logger.info(f"Initializing LLM service with Ollama at {self.settings.ollama_base_url}")
+            # Create HTTP client for Ollama API
+            self.client = httpx.AsyncClient(timeout=30.0)
             
-            # Create HTTP client
-            self.client = httpx.AsyncClient(
-                base_url=self.settings.ollama_base_url,
-                timeout=httpx.Timeout(60.0)
-            )
+            # Test connection to Ollama
+            await self._test_ollama_connection()
             
-            # Check if Ollama is running
-            await self._check_ollama_health()
-            
-            # Get available models
-            await self._update_available_models()
-            
-            # Ensure the configured model is available
-            await self._ensure_model_available()
-            
-            self.is_initialized = True
-            logger.info("LLM Service initialized successfully")
+            logger.info("LLM service initialized successfully")
             
         except Exception as e:
             logger.error(f"Failed to initialize LLM service: {e}")
             raise
     
-    async def _check_ollama_health(self) -> None:
-        """Check if Ollama server is running"""
+    async def _test_ollama_connection(self):
+        """Test connection to Ollama server."""
         try:
-            response = await self.client.get("/api/tags")
-            if response.status_code != 200:
-                raise Exception(f"Ollama server returned status {response.status_code}")
-        except httpx.ConnectError:
-            raise Exception(f"Cannot connect to Ollama server at {self.settings.ollama_base_url}")
-    
-    async def _update_available_models(self) -> None:
-        """Update list of available models"""
-        try:
-            response = await self.client.get("/api/tags")
+            response = await self.client.get(f"{self.ollama_host}/api/tags")
             if response.status_code == 200:
-                data = response.json()
-                self.available_models = [model["name"] for model in data.get("models", [])]
-                logger.info(f"Available models: {self.available_models}")
+                models = response.json()
+                logger.info(f"Connected to Ollama. Available models: {[m['name'] for m in models.get('models', [])]}")
             else:
-                logger.warning("Could not fetch available models")
-        except Exception as e:
-            logger.error(f"Error fetching available models: {e}")
-    
-    async def _ensure_model_available(self) -> None:
-        """Ensure the configured model is available"""
-        if self.settings.ollama_model not in self.available_models:
-            logger.warning(f"Model {self.settings.ollama_model} not found. Attempting to pull...")
-            await self.pull_model(self.settings.ollama_model)
-    
-    async def pull_model(self, model_name: str) -> bool:
-        """
-        Pull a model from Ollama registry
-        
-        Args:
-            model_name: Name of the model to pull
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        try:
-            logger.info(f"Pulling model: {model_name}")
-            
-            async with self.client.stream(
-                "POST", 
-                "/api/pull",
-                json={"name": model_name}
-            ) as response:
-                if response.status_code != 200:
-                    logger.error(f"Failed to pull model: {response.status_code}")
-                    return False
+                raise Exception(f"Ollama server returned status {response.status_code}")
                 
-                async for line in response.aiter_lines():
-                    if line:
-                        try:
-                            data = json.loads(line)
-                            if "status" in data:
-                                logger.info(f"Pull status: {data['status']}")
-                            if data.get("status") == "success":
-                                logger.info(f"Model {model_name} pulled successfully")
-                                await self._update_available_models()
-                                return True
-                        except json.JSONDecodeError:
-                            continue
-            
-            return False
-            
         except Exception as e:
-            logger.error(f"Error pulling model {model_name}: {e}")
-            return False
+            logger.warning(f"Could not connect to Ollama: {e}")
+            logger.info("LLM service will continue without Ollama (limited functionality)")
     
     async def generate_response(
         self, 
-        prompt: str, 
-        context: Optional[str] = None,
+        message: str, 
+        session_id: Optional[str] = None,
         system_prompt: Optional[str] = None,
-        temperature: float = 0.7,
-        max_tokens: Optional[int] = None
+        max_tokens: int = 1000,
+        temperature: float = 0.7
     ) -> Dict[str, Any]:
         """
-        Generate response from LLM
+        Generate a response to a user message.
         
         Args:
-            prompt: User prompt
-            context: Conversation context
-            system_prompt: System prompt for behavior
-            temperature: Response randomness (0.0-1.0)
-            max_tokens: Maximum tokens to generate
+            message: User's input message
+            session_id: Optional session ID for conversation context
+            system_prompt: Optional system prompt to guide the model
+            max_tokens: Maximum number of tokens to generate
+            temperature: Sampling temperature (0.0 to 1.0)
             
         Returns:
-            Dictionary with response and metadata
+            Dictionary containing the generated response and metadata
         """
-        if not self.is_initialized:
-            await self.initialize()
-        
-        start_time = time.time()
-        
         try:
-            # Build the full prompt
-            full_prompt = self._build_prompt(prompt, context, system_prompt)
+            if not self.client:
+                await self.initialize()
             
-            logger.info(f"Generating response with model: {self.settings.ollama_model}")
+            # Get conversation history
+            history = self._get_conversation_history(session_id)
             
-            # Prepare request data
-            request_data = {
-                "model": self.settings.ollama_model,
-                "prompt": full_prompt,
+            # Build messages for the model
+            messages = []
+            
+            # Add system prompt if provided
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            elif not history:
+                # Default system prompt for new conversations
+                messages.append({
+                    "role": "system", 
+                    "content": "You are a helpful AI assistant. Be concise, friendly, and informative in your responses."
+                })
+            
+            # Add conversation history
+            messages.extend(history)
+            
+            # Add current user message
+            messages.append({"role": "user", "content": message})
+            
+            # Generate response using Ollama
+            response_data = await self._call_ollama(messages, max_tokens, temperature)
+            
+            # Update conversation history
+            if session_id:
+                self._update_conversation_history(session_id, message, response_data["content"])
+            
+            return {
+                "content": response_data["content"],
+                "model": self.model_name,
+                "session_id": session_id,
+                "tokens_used": response_data.get("tokens_used", 0),
+                "finish_reason": response_data.get("finish_reason", "stop")
+            }
+            
+        except Exception as e:
+            logger.error(f"Error generating response: {e}")
+            # Fallback response
+            return {
+                "content": "I apologize, but I'm having trouble processing your request right now. Please try again.",
+                "model": self.model_name,
+                "session_id": session_id,
+                "error": str(e)
+            }
+    
+    async def _call_ollama(
+        self, 
+        messages: List[Dict[str, str]], 
+        max_tokens: int, 
+        temperature: float
+    ) -> Dict[str, Any]:
+        """Call Ollama API to generate response."""
+        try:
+            payload = {
+                "model": self.model_name,
+                "messages": messages,
                 "stream": False,
                 "options": {
+                    "num_predict": max_tokens,
                     "temperature": temperature,
-                    "num_predict": max_tokens or 2048,
                     "top_p": 0.9,
                     "top_k": 40
                 }
             }
             
-            # Make request to Ollama
-            response = await self.client.post("/api/generate", json=request_data)
+            response = await self.client.post(
+                f"{self.ollama_host}/api/chat",
+                json=payload
+            )
             
-            if response.status_code != 200:
-                raise Exception(f"Ollama API returned status {response.status_code}: {response.text}")
-            
-            data = response.json()
-            processing_time = time.time() - start_time
-            
-            result = {
-                "response": data.get("response", "").strip(),
-                "model": self.settings.ollama_model,
-                "processing_time": processing_time,
-                "prompt_tokens": data.get("prompt_eval_count", 0),
-                "completion_tokens": data.get("eval_count", 0),
-                "total_tokens": data.get("prompt_eval_count", 0) + data.get("eval_count", 0),
-                "done": data.get("done", False)
-            }
-            
-            logger.info(f"Response generated in {processing_time:.2f}s")
-            return result
-            
+            if response.status_code == 200:
+                result = response.json()
+                return {
+                    "content": result["message"]["content"],
+                    "tokens_used": result.get("eval_count", 0),
+                    "finish_reason": "stop" if result.get("done", False) else "length"
+                }
+            else:
+                error_msg = f"Ollama API error: {response.status_code}"
+                if response.text:
+                    error_msg += f" - {response.text}"
+                raise Exception(error_msg)
+                
         except Exception as e:
-            logger.error(f"Response generation failed: {e}")
-            return {
-                "response": "",
-                "error": str(e),
-                "processing_time": time.time() - start_time,
-                "model": self.settings.ollama_model
-            }
+            logger.error(f"Ollama API call failed: {e}")
+            raise
     
     async def generate_streaming_response(
         self, 
-        prompt: str, 
-        context: Optional[str] = None,
+        message: str, 
+        session_id: Optional[str] = None,
         system_prompt: Optional[str] = None,
+        max_tokens: int = 1000,
         temperature: float = 0.7
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ):
         """
-        Generate streaming response from LLM
+        Generate a streaming response to a user message.
         
         Args:
-            prompt: User prompt
-            context: Conversation context
-            system_prompt: System prompt for behavior
-            temperature: Response randomness (0.0-1.0)
+            message: User's input message
+            session_id: Optional session ID for conversation context
+            system_prompt: Optional system prompt to guide the model
+            max_tokens: Maximum number of tokens to generate
+            temperature: Sampling temperature (0.0 to 1.0)
             
         Yields:
-            Dictionary with partial response and metadata
+            Chunks of the generated response
         """
-        if not self.is_initialized:
-            await self.initialize()
-        
-        start_time = time.time()
-        
         try:
-            # Build the full prompt
-            full_prompt = self._build_prompt(prompt, context, system_prompt)
+            if not self.client:
+                await self.initialize()
             
-            logger.info(f"Starting streaming response with model: {self.settings.ollama_model}")
+            # Get conversation history
+            history = self._get_conversation_history(session_id)
             
-            # Prepare request data
-            request_data = {
-                "model": self.settings.ollama_model,
-                "prompt": full_prompt,
+            # Build messages for the model
+            messages = []
+            
+            # Add system prompt if provided
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            elif not history:
+                messages.append({
+                    "role": "system", 
+                    "content": "You are a helpful AI assistant. Be concise, friendly, and informative in your responses."
+                })
+            
+            # Add conversation history
+            messages.extend(history)
+            
+            # Add current user message
+            messages.append({"role": "user", "content": message})
+            
+            # Generate streaming response
+            full_response = ""
+            async for chunk in self._call_ollama_streaming(messages, max_tokens, temperature):
+                full_response += chunk
+                yield chunk
+            
+            # Update conversation history
+            if session_id:
+                self._update_conversation_history(session_id, message, full_response)
+                
+        except Exception as e:
+            logger.error(f"Error generating streaming response: {e}")
+            yield "I apologize, but I'm having trouble processing your request right now."
+    
+    async def _call_ollama_streaming(
+        self, 
+        messages: List[Dict[str, str]], 
+        max_tokens: int, 
+        temperature: float
+    ):
+        """Call Ollama API with streaming response."""
+        try:
+            payload = {
+                "model": self.model_name,
+                "messages": messages,
                 "stream": True,
                 "options": {
+                    "num_predict": max_tokens,
                     "temperature": temperature,
-                    "num_predict": 2048,
                     "top_p": 0.9,
                     "top_k": 40
                 }
             }
             
-            # Make streaming request to Ollama
-            async with self.client.stream("POST", "/api/generate", json=request_data) as response:
-                if response.status_code != 200:
-                    yield {
-                        "response": "",
-                        "error": f"Ollama API returned status {response.status_code}",
-                        "done": True
-                    }
-                    return
-                
-                full_response = ""
-                async for line in response.aiter_lines():
-                    if line:
-                        try:
-                            data = json.loads(line)
-                            
-                            if "response" in data:
-                                chunk = data["response"]
-                                full_response += chunk
-                                
-                                yield {
-                                    "response": chunk,
-                                    "full_response": full_response,
-                                    "model": self.settings.ollama_model,
-                                    "done": data.get("done", False),
-                                    "processing_time": time.time() - start_time
-                                }
-                            
-                            if data.get("done", False):
-                                logger.info(f"Streaming response completed in {time.time() - start_time:.2f}s")
-                                break
-                                
-                        except json.JSONDecodeError:
-                            continue
+            async with self.client.stream(
+                "POST",
+                f"{self.ollama_host}/api/chat",
+                json=payload
+            ) as response:
+                if response.status_code == 200:
+                    async for line in response.aiter_lines():
+                        if line:
+                            try:
+                                data = json.loads(line)
+                                if "message" in data and "content" in data["message"]:
+                                    yield data["message"]["content"]
+                            except json.JSONDecodeError:
+                                continue
+                else:
+                    raise Exception(f"Ollama streaming API error: {response.status_code}")
+                    
+        except Exception as e:
+            logger.error(f"Ollama streaming API call failed: {e}")
+            raise
+    
+    def _get_conversation_history(self, session_id: Optional[str]) -> List[Dict[str, str]]:
+        """Get conversation history for a session."""
+        if not session_id:
+            return []
+        
+        return self.conversation_history.get(session_id, [])
+    
+    def _update_conversation_history(self, session_id: str, user_message: str, assistant_response: str):
+        """Update conversation history for a session."""
+        if session_id not in self.conversation_history:
+            self.conversation_history[session_id] = []
+        
+        # Add user message and assistant response
+        self.conversation_history[session_id].extend([
+            {"role": "user", "content": user_message},
+            {"role": "assistant", "content": assistant_response}
+        ])
+        
+        # Keep only last 20 messages to prevent memory issues
+        if len(self.conversation_history[session_id]) > 20:
+            self.conversation_history[session_id] = self.conversation_history[session_id][-20:]
+    
+    async def summarize_text(self, text: str, max_length: int = 200) -> str:
+        """
+        Summarize a given text.
+        
+        Args:
+            text: Text to summarize
+            max_length: Maximum length of summary
+            
+        Returns:
+            Summarized text
+        """
+        try:
+            prompt = f"Please provide a concise summary of the following text in no more than {max_length} characters:\n\n{text}"
+            
+            response = await self.generate_response(
+                message=prompt,
+                system_prompt="You are a text summarization assistant. Provide clear, concise summaries.",
+                max_tokens=max_length // 4,  # Rough estimate of tokens
+                temperature=0.3
+            )
+            
+            return response["content"]
             
         except Exception as e:
-            logger.error(f"Streaming response failed: {e}")
-            yield {
-                "response": "",
-                "error": str(e),
-                "done": True,
-                "processing_time": time.time() - start_time
-            }
-    
-    def _build_prompt(self, prompt: str, context: Optional[str] = None, system_prompt: Optional[str] = None) -> str:
-        """Build the full prompt with context and system instructions"""
-        parts = []
-        
-        # Add system prompt
-        if system_prompt:
-            parts.append(f"System: {system_prompt}")
-        else:
-            parts.append("System: You are a helpful AI assistant. Provide clear, concise, and accurate responses.")
-        
-        # Add conversation context
-        if context:
-            parts.append(f"Context:\n{context}")
-        
-        # Add current prompt
-        parts.append(f"Human: {prompt}")
-        parts.append("Assistant:")
-        
-        return "\n\n".join(parts)
+            logger.error(f"Error summarizing text: {e}")
+            return text[:max_length] + "..." if len(text) > max_length else text
     
     async def get_available_models(self) -> List[str]:
-        """Get list of available models"""
-        if not self.is_initialized:
-            await self.initialize()
-        
-        await self._update_available_models()
-        return self.available_models
+        """Get list of available models from Ollama."""
+        try:
+            if not self.client:
+                await self.initialize()
+            
+            response = await self.client.get(f"{self.ollama_host}/api/tags")
+            if response.status_code == 200:
+                models_data = response.json()
+                return [model["name"] for model in models_data.get("models", [])]
+            else:
+                logger.warning(f"Could not fetch models: {response.status_code}")
+                return [self.model_name]
+                
+        except Exception as e:
+            logger.error(f"Error fetching available models: {e}")
+            return [self.model_name]
     
     async def switch_model(self, model_name: str) -> bool:
         """
-        Switch to a different model
+        Switch to a different model.
         
         Args:
             model_name: Name of the model to switch to
@@ -324,80 +349,79 @@ class LLMService:
             True if successful, False otherwise
         """
         try:
-            if model_name not in self.available_models:
-                logger.info(f"Model {model_name} not available, attempting to pull...")
-                if not await self.pull_model(model_name):
-                    return False
-            
-            # Update configuration
-            update_ollama_config(model=model_name)
-            logger.info(f"Switched to model: {model_name}")
-            return True
-            
+            available_models = await self.get_available_models()
+            if model_name in available_models:
+                self.model_name = model_name
+                logger.info(f"Switched to model: {model_name}")
+                return True
+            else:
+                logger.warning(f"Model {model_name} not available. Available models: {available_models}")
+                return False
+                
         except Exception as e:
-            logger.error(f"Failed to switch model: {e}")
+            logger.error(f"Error switching model: {e}")
             return False
     
-    async def update_base_url(self, base_url: str) -> bool:
-        """
-        Update Ollama base URL
+    def clear_conversation_history(self, session_id: str):
+        """Clear conversation history for a session."""
+        if session_id in self.conversation_history:
+            del self.conversation_history[session_id]
+            logger.info(f"Cleared conversation history for session: {session_id}")
+    
+    def get_conversation_summary(self, session_id: str) -> Dict[str, Any]:
+        """Get summary of conversation for a session."""
+        history = self.conversation_history.get(session_id, [])
         
-        Args:
-            base_url: New base URL for Ollama
-            
-        Returns:
-            True if successful, False otherwise
-        """
+        return {
+            "session_id": session_id,
+            "message_count": len(history),
+            "last_message": history[-1]["content"] if history else None,
+            "conversation_length": sum(len(msg["content"]) for msg in history)
+        }
+    
+    async def health_check(self) -> str:
+        """Check the health of the LLM service."""
         try:
-            # Update configuration
-            update_ollama_config(base_url=base_url)
+            if not self.client:
+                return "not_initialized"
             
-            # Reinitialize with new URL
+            # Test with a simple message
+            response = await self.generate_response(
+                message="Hello, this is a health check.",
+                max_tokens=50,
+                temperature=0.1
+            )
+            
+            if "error" in response:
+                return f"error: {response['error']}"
+            
+            return "healthy"
+            
+        except Exception as e:
+            logger.error(f"LLM health check failed: {e}")
+            return f"error: {str(e)}"
+    
+    async def cleanup(self):
+        """Clean up resources."""
+        try:
             if self.client:
                 await self.client.aclose()
+                self.client = None
             
-            self.is_initialized = False
-            await self.initialize()
+            # Clear conversation history
+            self.conversation_history.clear()
             
-            logger.info(f"Updated Ollama base URL to: {base_url}")
-            return True
+            logger.info("LLM service cleaned up")
             
         except Exception as e:
-            logger.error(f"Failed to update base URL: {e}")
-            return False
+            logger.error(f"Error cleaning up LLM service: {e}")
     
-    async def health_check(self) -> Dict[str, Any]:
-        """Check service health"""
-        try:
-            if not self.is_initialized:
-                await self.initialize()
-            
-            # Test with a simple prompt
-            test_response = await self.generate_response("Hello", max_tokens=10)
-            
-            return {
-                "status": "healthy",
-                "base_url": self.settings.ollama_base_url,
-                "current_model": self.settings.ollama_model,
-                "available_models": self.available_models,
-                "test_response_time": test_response.get("processing_time", 0),
-                "initialized": self.is_initialized
-            }
-        except Exception as e:
-            return {
-                "status": "unhealthy",
-                "error": str(e),
-                "base_url": self.settings.ollama_base_url,
-                "current_model": self.settings.ollama_model
-            }
-    
-    async def cleanup(self) -> None:
-        """Cleanup resources"""
-        if self.client:
-            await self.client.aclose()
-            self.client = None
-        self.is_initialized = False
-        logger.info("LLM Service cleaned up")
-
-# Global LLM service instance
-llm_service = LLMService() 
+    def get_service_info(self) -> Dict[str, Any]:
+        """Get information about the LLM service."""
+        return {
+            "model_name": self.model_name,
+            "ollama_host": self.ollama_host,
+            "active_sessions": len(self.conversation_history),
+            "total_conversations": sum(len(history) for history in self.conversation_history.values()),
+            "initialized": self.client is not None
+        } 

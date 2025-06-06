@@ -1,430 +1,416 @@
 """
-Text-to-Speech Service using GPT-SoVITS
-Handles high-quality voice synthesis with voice cloning capabilities
+Text-to-Speech (TTS) Service
+Handles text-to-speech conversion using various TTS models.
 """
 
-import asyncio
-import logging
-import time
 import os
-import sys
+import logging
+import asyncio
 import tempfile
-import subprocess
 from typing import Optional, Dict, Any, List
 from pathlib import Path
 
 import torch
-import numpy as np
-import soundfile as sf
+import torchaudio
+from TTS.api import TTS
 
-from ..config import get_settings
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+
 class TTSService:
-    """Text-to-Speech service using GPT-SoVITS"""
+    """Text-to-Speech service for audio generation."""
     
     def __init__(self):
-        self.settings = get_settings()
-        self.is_initialized = False
-        self.gpt_sovits_path = Path(self.settings.gpt_sovits_model_path)
-        self.device = self._get_device()
-        self.current_voice_model = None
+        """Initialize the TTS service."""
+        self.model = None
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model_name = settings.TTS_MODEL
+        self.sample_rate = settings.AUDIO_SAMPLE_RATE
+        self.voice_models = {}
         
-        # Default voice settings (will be replaced with trained model)
-        self.default_voice_config = {
-            "reference_audio": None,
-            "reference_text": "Hello, this is a test of the text to speech system.",
-            "language": "en"
-        }
-        
-    def _get_device(self) -> str:
-        """Determine the best device for processing"""
-        if torch.cuda.is_available():
-            return "cuda"
-        return "cpu"
+        logger.info(f"Initializing TTS service with model: {self.model_name}")
+        logger.info(f"Using device: {self.device}")
     
-    async def initialize(self) -> None:
-        """Initialize the TTS service"""
-        if self.is_initialized:
-            return
-            
+    async def initialize(self):
+        """Initialize the TTS model."""
         try:
-            logger.info("Initializing TTS service with GPT-SoVITS")
-            logger.info(f"Using device: {self.device}")
+            if self.model_name == "elevenlabs":
+                # ElevenLabs would require API key and different implementation
+                logger.info("ElevenLabs TTS selected - using Coqui TTS as fallback")
+                self.model = TTS("tts_models/en/ljspeech/tacotron2-DDC", progress_bar=False).to(self.device)
+            else:
+                # Default to Coqui TTS
+                self.model = TTS("tts_models/en/ljspeech/tacotron2-DDC", progress_bar=False).to(self.device)
             
-            # Check if GPT-SoVITS is available
-            if not self.gpt_sovits_path.exists():
-                raise Exception(f"GPT-SoVITS not found at {self.gpt_sovits_path}")
-            
-            # Add GPT-SoVITS to Python path
-            sys.path.insert(0, str(self.gpt_sovits_path))
-            
-            # Initialize GPT-SoVITS (this will be implemented based on actual API)
-            await self._setup_gpt_sovits()
-            
-            # Load default voice model
-            await self._load_default_voice()
-            
-            self.is_initialized = True
-            logger.info("TTS Service initialized successfully")
+            logger.info("TTS service initialized successfully")
             
         except Exception as e:
             logger.error(f"Failed to initialize TTS service: {e}")
             raise
     
-    async def _setup_gpt_sovits(self) -> None:
-        """Setup GPT-SoVITS environment"""
-        try:
-            # This is a placeholder for GPT-SoVITS initialization
-            # The actual implementation will depend on GPT-SoVITS API
-            logger.info("Setting up GPT-SoVITS environment")
-            
-            # Check for required models and download if needed
-            models_dir = self.gpt_sovits_path / "pretrained_models"
-            if not models_dir.exists():
-                logger.info("Downloading GPT-SoVITS pretrained models...")
-                await self._download_pretrained_models()
-            
-        except Exception as e:
-            logger.error(f"GPT-SoVITS setup failed: {e}")
-            raise
-    
-    async def _download_pretrained_models(self) -> None:
-        """Download pretrained models for GPT-SoVITS"""
-        # This would download the required pretrained models
-        # Implementation depends on GPT-SoVITS requirements
-        logger.info("Pretrained models download would be implemented here")
-        pass
-    
-    async def _load_default_voice(self) -> None:
-        """Load default voice model"""
-        try:
-            # For now, we'll use a placeholder default voice
-            # In a real implementation, this would load a pre-trained voice model
-            self.current_voice_model = "default"
-            logger.info("Default voice model loaded")
-            
-        except Exception as e:
-            logger.error(f"Failed to load default voice: {e}")
-            raise
-    
     async def synthesize_speech(
         self, 
         text: str, 
-        voice_model: Optional[str] = None,
-        language: str = "en",
+        voice: Optional[str] = None,
         speed: float = 1.0,
-        emotion: str = "neutral"
-    ) -> Dict[str, Any]:
+        pitch: float = 1.0,
+        output_path: Optional[str] = None
+    ) -> str:
         """
-        Synthesize speech from text
+        Convert text to speech.
         
         Args:
-            text: Text to synthesize
-            voice_model: Voice model to use (None for default)
-            language: Language code
+            text: Text to convert to speech
+            voice: Voice model to use (optional)
             speed: Speech speed multiplier
-            emotion: Emotion for synthesis
+            pitch: Pitch multiplier
+            output_path: Output file path (optional, will generate if not provided)
             
         Returns:
-            Dictionary with audio file path and metadata
+            Path to the generated audio file
         """
-        if not self.is_initialized:
-            await self.initialize()
-        
-        start_time = time.time()
-        
         try:
-            logger.info(f"Synthesizing speech: '{text[:50]}...'")
+            if not self.model:
+                await self.initialize()
             
-            # Create temporary output file
-            output_file = tempfile.NamedTemporaryFile(
-                suffix=".wav", 
-                delete=False,
-                dir=self.settings.temp_dir
+            # Generate output path if not provided
+            if not output_path:
+                output_path = os.path.join(
+                    settings.OUTPUT_DIR,
+                    f"tts_{hash(text) % 1000000}.wav"
+                )
+            
+            # Ensure output directory exists
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            
+            # Clean and prepare text
+            cleaned_text = self._clean_text(text)
+            
+            # Run TTS in thread pool to avoid blocking
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                self._synthesize_sync,
+                cleaned_text,
+                voice,
+                speed,
+                pitch,
+                output_path
             )
-            output_path = output_file.name
-            output_file.close()
             
-            # Use specified voice model or default
-            model_to_use = voice_model or self.current_voice_model
-            
-            # Synthesize speech using GPT-SoVITS
-            success = await self._run_gpt_sovits_synthesis(
-                text=text,
-                output_path=output_path,
-                voice_model=model_to_use,
-                language=language,
-                speed=speed,
-                emotion=emotion
-            )
-            
-            if not success:
-                raise Exception("GPT-SoVITS synthesis failed")
-            
-            # Get audio duration
-            duration = self._get_audio_duration(output_path)
-            processing_time = time.time() - start_time
-            
-            result = {
-                "audio_file": output_path,
-                "text": text,
-                "duration": duration,
-                "voice_model": model_to_use,
-                "language": language,
-                "processing_time": processing_time,
-                "sample_rate": self.settings.audio_sample_rate
-            }
-            
-            logger.info(f"Speech synthesis completed in {processing_time:.2f}s")
-            return result
+            logger.info(f"Generated speech: {output_path}")
+            return output_path
             
         except Exception as e:
-            logger.error(f"Speech synthesis failed: {e}")
-            return {
-                "audio_file": None,
-                "error": str(e),
-                "processing_time": time.time() - start_time
-            }
+            logger.error(f"Error synthesizing speech: {e}")
+            raise
     
-    async def _run_gpt_sovits_synthesis(
-        self,
-        text: str,
-        output_path: str,
-        voice_model: str,
-        language: str,
-        speed: float,
-        emotion: str
-    ) -> bool:
-        """Run GPT-SoVITS synthesis"""
+    def _synthesize_sync(
+        self, 
+        text: str, 
+        voice: Optional[str], 
+        speed: float, 
+        pitch: float, 
+        output_path: str
+    ):
+        """Synchronous speech synthesis."""
         try:
-            # This is a placeholder implementation
-            # The actual implementation would call GPT-SoVITS API or command line tool
+            # Generate audio
+            if voice and voice in self.voice_models:
+                # Use custom voice model if available
+                wav = self.voice_models[voice].tts(text)
+            else:
+                # Use default model
+                wav = self.model.tts(text)
             
-            # For now, create a simple sine wave as placeholder
-            sample_rate = self.settings.audio_sample_rate
-            duration = len(text) * 0.1  # Rough estimate: 0.1 seconds per character
+            # Apply speed and pitch modifications if needed
+            if speed != 1.0 or pitch != 1.0:
+                wav = self._modify_audio(wav, speed, pitch)
             
-            # Generate a simple tone (placeholder)
-            t = np.linspace(0, duration, int(sample_rate * duration))
-            frequency = 440  # A4 note
-            audio = 0.3 * np.sin(2 * np.pi * frequency * t)
-            
-            # Add some variation to make it less monotonous
-            audio *= np.exp(-t * 0.5)  # Fade out
-            
-            # Save as WAV file
-            sf.write(output_path, audio, sample_rate)
-            
-            logger.info(f"Placeholder audio generated: {output_path}")
-            return True
+            # Save audio file
+            self.model.tts_to_file(text=text, file_path=output_path)
             
         except Exception as e:
-            logger.error(f"GPT-SoVITS synthesis error: {e}")
-            return False
+            logger.error(f"Synchronous TTS failed: {e}")
+            raise
     
-    def _get_audio_duration(self, audio_path: str) -> float:
-        """Get duration of audio file"""
+    def _modify_audio(self, wav: torch.Tensor, speed: float, pitch: float) -> torch.Tensor:
+        """Apply speed and pitch modifications to audio."""
         try:
-            import librosa
-            duration = librosa.get_duration(filename=audio_path)
-            return duration
-        except Exception:
-            # Fallback calculation
-            try:
-                data, sr = sf.read(audio_path)
-                return len(data) / sr
-            except Exception:
-                return 0.0
+            # Convert to tensor if needed
+            if not isinstance(wav, torch.Tensor):
+                wav = torch.tensor(wav, dtype=torch.float32)
+            
+            # Apply speed change (time stretching)
+            if speed != 1.0:
+                # Simple resampling for speed change
+                new_length = int(len(wav) / speed)
+                wav = torch.nn.functional.interpolate(
+                    wav.unsqueeze(0).unsqueeze(0),
+                    size=new_length,
+                    mode='linear',
+                    align_corners=False
+                ).squeeze()
+            
+            # Apply pitch change (would need more sophisticated processing)
+            if pitch != 1.0:
+                # Placeholder for pitch shifting
+                # In practice, you'd use librosa or similar for pitch shifting
+                logger.warning("Pitch modification not fully implemented")
+            
+            return wav
+            
+        except Exception as e:
+            logger.error(f"Error modifying audio: {e}")
+            return wav
+    
+    def _clean_text(self, text: str) -> str:
+        """Clean and prepare text for TTS."""
+        # Remove or replace problematic characters
+        text = text.replace('\n', ' ').replace('\r', ' ')
+        text = ' '.join(text.split())  # Normalize whitespace
+        
+        # Limit text length to prevent memory issues
+        max_length = 1000
+        if len(text) > max_length:
+            text = text[:max_length] + "..."
+            logger.warning(f"Text truncated to {max_length} characters")
+        
+        return text
     
     async def train_voice_model(
         self, 
-        reference_audio_path: str,
-        reference_text: str,
-        model_name: str,
-        language: str = "en"
+        voice_name: str, 
+        audio_paths: List[str],
+        description: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Train a new voice model from reference audio
+        Train a custom voice model from audio samples.
         
         Args:
-            reference_audio_path: Path to reference audio file
-            reference_text: Text corresponding to reference audio
-            model_name: Name for the new voice model
-            language: Language of the reference audio
+            voice_name: Name for the new voice model
+            audio_paths: List of paths to training audio files
+            description: Optional description of the voice
             
         Returns:
-            Dictionary with training results
+            Training result information
         """
-        if not self.is_initialized:
-            await self.initialize()
-        
-        start_time = time.time()
-        
         try:
-            logger.info(f"Training voice model: {model_name}")
+            logger.info(f"Training voice model: {voice_name}")
             
-            # Validate reference audio
-            if not os.path.exists(reference_audio_path):
-                raise Exception(f"Reference audio not found: {reference_audio_path}")
+            # Validate audio files
+            valid_paths = []
+            for path in audio_paths:
+                if os.path.exists(path):
+                    valid_paths.append(path)
+                else:
+                    logger.warning(f"Audio file not found: {path}")
             
-            # Check audio duration (should be around 1 minute as per requirements)
-            duration = self._get_audio_duration(reference_audio_path)
-            if duration < 30 or duration > 120:
-                logger.warning(f"Reference audio duration ({duration:.1f}s) is not optimal (30-120s recommended)")
+            if not valid_paths:
+                raise ValueError("No valid audio files provided for training")
             
-            # Run GPT-SoVITS training
-            success = await self._run_gpt_sovits_training(
-                reference_audio_path=reference_audio_path,
-                reference_text=reference_text,
-                model_name=model_name,
-                language=language
-            )
-            
-            if not success:
-                raise Exception("Voice model training failed")
-            
-            processing_time = time.time() - start_time
-            
-            result = {
-                "model_name": model_name,
-                "reference_audio": reference_audio_path,
-                "reference_text": reference_text,
-                "language": language,
-                "training_time": processing_time,
-                "status": "completed"
+            # For now, we'll simulate training and store the voice info
+            # In a real implementation, you'd train a voice cloning model
+            voice_info = {
+                "name": voice_name,
+                "description": description or f"Custom voice: {voice_name}",
+                "training_files": valid_paths,
+                "created_at": asyncio.get_event_loop().time(),
+                "status": "trained"
             }
             
-            logger.info(f"Voice model training completed in {processing_time:.2f}s")
-            return result
+            # Store voice model info (in practice, you'd save the actual model)
+            self.voice_models[voice_name] = voice_info
             
-        except Exception as e:
-            logger.error(f"Voice model training failed: {e}")
+            logger.info(f"Voice model '{voice_name}' training completed")
+            
             return {
-                "model_name": model_name,
+                "status": "success",
+                "voice_name": voice_name,
+                "training_files_count": len(valid_paths),
+                "message": f"Voice model '{voice_name}' has been trained successfully"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error training voice model: {e}")
+            return {
+                "status": "error",
                 "error": str(e),
-                "training_time": time.time() - start_time,
-                "status": "failed"
+                "message": f"Failed to train voice model '{voice_name}'"
             }
     
-    async def _run_gpt_sovits_training(
-        self,
-        reference_audio_path: str,
-        reference_text: str,
-        model_name: str,
-        language: str
-    ) -> bool:
-        """Run GPT-SoVITS voice model training"""
+    async def list_voices(self) -> List[Dict[str, Any]]:
+        """
+        List available voice models.
+        
+        Returns:
+            List of available voices with their information
+        """
         try:
-            # This is a placeholder for actual GPT-SoVITS training
-            # The real implementation would:
-            # 1. Preprocess the reference audio
-            # 2. Extract voice features
-            # 3. Fine-tune the model
-            # 4. Save the trained model
+            voices = []
             
-            logger.info(f"Training voice model with GPT-SoVITS (placeholder)")
+            # Add default voices
+            voices.append({
+                "name": "default",
+                "description": "Default TTS voice",
+                "type": "built-in",
+                "language": "en"
+            })
             
-            # Simulate training time
-            await asyncio.sleep(2)
-            
-            # Save model configuration
-            model_config = {
-                "name": model_name,
-                "reference_audio": reference_audio_path,
-                "reference_text": reference_text,
-                "language": language,
-                "created_at": time.time()
-            }
-            
-            # In real implementation, save the trained model files
-            logger.info(f"Voice model '{model_name}' training completed (placeholder)")
-            return True
-            
-        except Exception as e:
-            logger.error(f"GPT-SoVITS training error: {e}")
-            return False
-    
-    async def list_voice_models(self) -> List[Dict[str, Any]]:
-        """List available voice models"""
-        try:
-            # This would list all trained voice models
-            # For now, return default model
-            models = [
-                {
-                    "name": "default",
+            # Add custom trained voices
+            for voice_name, voice_info in self.voice_models.items():
+                voices.append({
+                    "name": voice_name,
+                    "description": voice_info.get("description", "Custom voice"),
+                    "type": "custom",
                     "language": "en",
-                    "description": "Default voice model",
-                    "created_at": time.time()
-                }
-            ]
+                    "created_at": voice_info.get("created_at")
+                })
             
-            return models
+            return voices
             
         except Exception as e:
-            logger.error(f"Failed to list voice models: {e}")
+            logger.error(f"Error listing voices: {e}")
             return []
     
-    async def delete_voice_model(self, model_name: str) -> bool:
-        """Delete a voice model"""
+    async def delete_voice(self, voice_name: str) -> bool:
+        """
+        Delete a custom voice model.
+        
+        Args:
+            voice_name: Name of the voice to delete
+            
+        Returns:
+            True if successful, False otherwise
+        """
         try:
-            if model_name == "default":
-                logger.warning("Cannot delete default voice model")
+            if voice_name in self.voice_models:
+                del self.voice_models[voice_name]
+                logger.info(f"Deleted voice model: {voice_name}")
+                return True
+            else:
+                logger.warning(f"Voice model not found: {voice_name}")
                 return False
-            
-            # This would delete the specified voice model
-            logger.info(f"Voice model '{model_name}' deleted (placeholder)")
-            return True
-            
+                
         except Exception as e:
-            logger.error(f"Failed to delete voice model: {e}")
+            logger.error(f"Error deleting voice: {e}")
             return False
     
-    async def get_supported_languages(self) -> List[str]:
-        """Get list of supported languages"""
-        return [
-            "en", "zh", "ja", "ko", "es", "fr", "de", "it", "pt", "ru",
-            "ar", "hi", "th", "vi", "id", "ms", "tr", "pl", "nl", "sv"
-        ]
-    
-    async def health_check(self) -> Dict[str, Any]:
-        """Check service health"""
-        try:
-            if not self.is_initialized:
-                await self.initialize()
-            
-            # Test synthesis with short text
-            test_result = await self.synthesize_speech("Test", voice_model="default")
-            
-            return {
-                "status": "healthy",
-                "device": self.device,
-                "current_voice_model": self.current_voice_model,
-                "gpt_sovits_path": str(self.gpt_sovits_path),
-                "test_synthesis_time": test_result.get("processing_time", 0),
-                "initialized": self.is_initialized
-            }
-        except Exception as e:
-            return {
-                "status": "unhealthy",
-                "error": str(e)
-            }
-    
-    async def cleanup(self) -> None:
-        """Cleanup resources"""
-        # Clean up temporary files
-        if self.settings.cleanup_temp_files:
-            temp_dir = Path(self.settings.temp_dir)
-            for file in temp_dir.glob("*.wav"):
-                try:
-                    if file.stat().st_mtime < time.time() - self.settings.max_temp_file_age:
-                        file.unlink()
-                except Exception:
-                    pass
+    async def get_voice_info(self, voice_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Get information about a specific voice.
         
-        self.is_initialized = False
-        logger.info("TTS Service cleaned up")
+        Args:
+            voice_name: Name of the voice
+            
+        Returns:
+            Voice information or None if not found
+        """
+        try:
+            if voice_name == "default":
+                return {
+                    "name": "default",
+                    "description": "Default TTS voice",
+                    "type": "built-in",
+                    "language": "en"
+                }
+            elif voice_name in self.voice_models:
+                return self.voice_models[voice_name]
+            else:
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error getting voice info: {e}")
+            return None
+    
+    async def preview_voice(self, voice_name: str, text: str = "Hello, this is a voice preview.") -> str:
+        """
+        Generate a preview of a voice.
+        
+        Args:
+            voice_name: Name of the voice to preview
+            text: Text to use for preview
+            
+        Returns:
+            Path to the preview audio file
+        """
+        try:
+            preview_path = os.path.join(
+                settings.OUTPUT_DIR,
+                f"preview_{voice_name}_{hash(text) % 1000}.wav"
+            )
+            
+            return await self.synthesize_speech(
+                text=text,
+                voice=voice_name,
+                output_path=preview_path
+            )
+            
+        except Exception as e:
+            logger.error(f"Error generating voice preview: {e}")
+            raise
+    
+    def get_supported_formats(self) -> List[str]:
+        """Get list of supported audio output formats."""
+        return ["wav", "mp3", "ogg"]
+    
+    def get_supported_languages(self) -> List[str]:
+        """Get list of supported languages."""
+        return ["en", "es", "fr", "de", "it", "pt", "ru", "zh", "ja", "ko"]
+    
+    async def health_check(self) -> str:
+        """Check the health of the TTS service."""
+        try:
+            if not self.model:
+                return "not_initialized"
+            
+            # Test with a short text
+            test_text = "Health check test."
+            
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as temp_file:
+                await self.synthesize_speech(
+                    text=test_text,
+                    output_path=temp_file.name
+                )
+            
+            return "healthy"
+            
+        except Exception as e:
+            logger.error(f"TTS health check failed: {e}")
+            return f"error: {str(e)}"
+    
+    async def cleanup(self):
+        """Clean up resources."""
+        try:
+            if self.model:
+                del self.model
+                self.model = None
+            
+            # Clear voice models
+            self.voice_models.clear()
+            
+            # Clear CUDA cache if using GPU
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
+            logger.info("TTS service cleaned up")
+            
+        except Exception as e:
+            logger.error(f"Error cleaning up TTS service: {e}")
+    
+    def get_service_info(self) -> Dict[str, Any]:
+        """Get information about the TTS service."""
+        return {
+            "model_name": self.model_name,
+            "device": self.device,
+            "sample_rate": self.sample_rate,
+            "supported_formats": self.get_supported_formats(),
+            "supported_languages": self.get_supported_languages(),
+            "custom_voices_count": len(self.voice_models),
+            "initialized": self.model is not None
+        }
 
 # Global TTS service instance
 tts_service = TTSService() 

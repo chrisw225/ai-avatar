@@ -1,17 +1,14 @@
 """
-Utility functions and helpers for the AI Chatbot application
+Utilities Package
+Contains utility classes and functions for file management, validation, and other common tasks.
 """
 
-from .audio_utils import AudioProcessor
-from .file_utils import FileManager
-from .validation_utils import InputValidator
-from .ffmpeg_utils import FFmpegManager, get_ffmpeg_manager, ensure_ffmpeg
+from .file_manager import FileManager
+from .validators import AudioValidator, VideoValidator, ImageValidator
 
 __all__ = [
-"AudioProcessor",
-"FileManager",
-    "InputValidator",
-    "FFmpegManager",
-    "get_ffmpeg_manager",
-    "ensure_ffmpeg"
+    "FileManager",
+    "AudioValidator", 
+    "VideoValidator",
+    "ImageValidator"
 ]
