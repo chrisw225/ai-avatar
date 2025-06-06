@@ -369,13 +369,32 @@ class TTSService:
             # Test with a short text
             test_text = "Health check test."
             
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as temp_file:
+            # Use project temp directory instead of system temp
+            temp_dir = settings.TEMP_DIR
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            temp_file_path = os.path.join(temp_dir, f"tts_health_check_{os.getpid()}.wav")
+            
+            try:
                 await self.synthesize_speech(
                     text=test_text,
-                    output_path=temp_file.name
+                    output_path=temp_file_path
                 )
-            
-            return "healthy"
+                
+                # Clean up the temp file
+                if os.path.exists(temp_file_path):
+                    os.remove(temp_file_path)
+                    
+                return "healthy"
+                
+            except Exception as e:
+                # Clean up temp file if it exists
+                if os.path.exists(temp_file_path):
+                    try:
+                        os.remove(temp_file_path)
+                    except:
+                        pass
+                raise e
             
         except Exception as e:
             logger.error(f"TTS health check failed: {e}")

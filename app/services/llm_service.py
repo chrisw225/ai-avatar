@@ -19,13 +19,13 @@ class LLMService:
     
     def __init__(self):
         """Initialize the LLM service."""
-        self.model_name = settings.LLM_MODEL
-        self.ollama_host = settings.OLLAMA_HOST
+        self.model_name = settings.OLLAMA_MODEL
+        self.ollama_base_url = settings.OLLAMA_BASE_URL
         self.client = None
         self.conversation_history = {}
         
         logger.info(f"Initializing LLM service with model: {self.model_name}")
-        logger.info(f"Ollama host: {self.ollama_host}")
+        logger.info(f"Ollama base URL: {self.ollama_base_url}")
     
     async def initialize(self):
         """Initialize the LLM service."""
@@ -45,7 +45,7 @@ class LLMService:
     async def _test_ollama_connection(self):
         """Test connection to Ollama server."""
         try:
-            response = await self.client.get(f"{self.ollama_host}/api/tags")
+            response = await self.client.get(f"{self.ollama_base_url}/api/tags")
             if response.status_code == 200:
                 models = response.json()
                 logger.info(f"Connected to Ollama. Available models: {[m['name'] for m in models.get('models', [])]}")
@@ -149,7 +149,7 @@ class LLMService:
             }
             
             response = await self.client.post(
-                f"{self.ollama_host}/api/chat",
+                f"{self.ollama_base_url}/api/chat",
                 json=payload
             )
             
@@ -252,7 +252,7 @@ class LLMService:
             
             async with self.client.stream(
                 "POST",
-                f"{self.ollama_host}/api/chat",
+                f"{self.ollama_base_url}/api/chat",
                 json=payload
             ) as response:
                 if response.status_code == 200:
@@ -326,7 +326,7 @@ class LLMService:
             if not self.client:
                 await self.initialize()
             
-            response = await self.client.get(f"{self.ollama_host}/api/tags")
+            response = await self.client.get(f"{self.ollama_base_url}/api/tags")
             if response.status_code == 200:
                 models_data = response.json()
                 return [model["name"] for model in models_data.get("models", [])]
@@ -420,7 +420,7 @@ class LLMService:
         """Get information about the LLM service."""
         return {
             "model_name": self.model_name,
-            "ollama_host": self.ollama_host,
+            "ollama_base_url": self.ollama_base_url,
             "active_sessions": len(self.conversation_history),
             "total_conversations": sum(len(history) for history in self.conversation_history.values()),
             "initialized": self.client is not None

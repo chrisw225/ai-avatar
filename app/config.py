@@ -33,9 +33,8 @@ class Settings(BaseSettings):
     TTS_MODEL: str = Field(default="coqui", description="Text-to-speech model")
     
     # Ollama configuration
-    OLLAMA_HOST: str = Field(default="localhost:11434", description="Ollama server host")
+    OLLAMA_BASE_URL: str = Field(default="http://localhost:11434", description="Ollama server base URL")
     OLLAMA_MODEL: str = Field(default="llama3.1:8b", description="Ollama model name")
-    OLLAMA_BASE_URL: str = Field(default="http://localhost:11434", description="Ollama base URL")
     
     # File storage configuration
     UPLOAD_DIR: str = Field(default="uploads", description="Upload directory")
@@ -190,7 +189,7 @@ def print_settings():
     print(f"  STT Model: {settings.STT_MODEL}")
     print(f"  LLM Model: {settings.LLM_MODEL}")
     print(f"  TTS Model: {settings.TTS_MODEL}")
-    print(f"  Ollama Host: {settings.OLLAMA_HOST}")
+    print(f"  Ollama Host: {settings.OLLAMA_BASE_URL}")
     print(f"  Upload Directory: {settings.UPLOAD_DIR}")
     print(f"  Output Directory: {settings.OUTPUT_DIR}")
     print(f"  Models Directory: {settings.MODELS_DIR}")
